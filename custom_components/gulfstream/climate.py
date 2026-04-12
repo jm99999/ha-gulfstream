@@ -49,6 +49,10 @@ _HA_TO_MODE: dict[tuple[HVACMode, str], Mode] = {
     (HVACMode.HEAT,      PRESET_SPA):    Mode.SPA,
 }
 
+# Verification timeout for commands sent to the heat pump.
+# The device polls the server every 3–10 s; 30 s gives ~5 chances for delivery.
+_VERIFY_TIMEOUT = 30
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -61,10 +65,42 @@ async def async_setup_entry(
 
 
 class GulfstreamClimate(CoordinatorEntity[GulfstreamCoordinator], ClimateEntity):
-    """Climate entity representing a Gulfstream pool heat pump."""
+    """Climate entity representing a Gulfstream pool heat pump.
+
+    Modes
+    -----
+    The device supports five operating modes:
+
+    =====================  ================  ===========
+    Device mode            HA HVAC mode      HA preset
+    =====================  ================  ===========
+    Off                    off               normal
+    Pool Heat              heat              normal
+    Pool Cool              cool              normal   *
+    Pool Heat/Cool (Auto)  heat_cool         normal   *
+    Spa                    heat              spa
+    =====================  ================  ===========
+
+    (*) Pool Cool and Pool Heat/Cool must be **enabled** in the device's
+    System Configuration section of the Compass WiFi app before they
+    will have any effect. If they are disabled, commands to set those
+    modes will be accepted by the server but ignored by the heat pump.
+
+    Spa mode is exposed as a preset (not a fifth HVAC mode) because HA's
+    climate model does not have a native spa concept. Spa mode heats to a
+    separate setpoint — functionally identical to Pool Heat but with a
+    different temperature target.
+
+    Command verification
+    --------------------
+    All mode and setpoint changes are sent with verify=True (timeout 30 s).
+    The library polls the device until it confirms the register changed, or
+    times out. A timeout or conflict is logged as a warning but does not
+    raise an error in HA (the next poll will reconcile state).
+    """
 
     _attr_has_entity_name = True
-    _attr_name = None  # use device name as entity name
+    _attr_name = None  # entity name = device name (HA primary-feature convention)
     _attr_temperature_unit = UnitOfTemperature.FAHRENHEIT
     _attr_target_temperature_step = 1.0
     _attr_hvac_modes = [HVACMode.OFF, HVACMode.HEAT, HVACMode.COOL, HVACMode.HEAT_COOL]
@@ -89,31 +125,28 @@ class GulfstreamClimate(CoordinatorEntity[GulfstreamCoordinator], ClimateEntity)
 
     @property
     def current_temperature(self) -> float | None:
-        """Current water temperature."""
+        """Current water temperature (RSV2 register)."""
         return self.coordinator.data.water_temp if self.coordinator.data else None
 
     @property
     def target_temperature(self) -> float | None:
-        """Current setpoint."""
+        """Current heat setpoint (RSV1 register)."""
         return self.coordinator.data.setpoint if self.coordinator.data else None
 
     @property
     def min_temp(self) -> float:
-        """Minimum settable temperature."""
         if self.coordinator.data:
             return float(self.coordinator.data.min_heat)
         return 50.0
 
     @property
     def max_temp(self) -> float:
-        """Maximum settable temperature."""
         if self.coordinator.data:
             return float(self.coordinator.data.max_heat)
         return 104.0
 
     @property
     def hvac_mode(self) -> HVACMode | None:
-        """Current HVAC mode."""
         if not self.coordinator.data:
             return None
         api_mode = int(self.coordinator.data.mode)
@@ -122,7 +155,6 @@ class GulfstreamClimate(CoordinatorEntity[GulfstreamCoordinator], ClimateEntity)
 
     @property
     def preset_mode(self) -> str | None:
-        """Current preset mode."""
         if not self.coordinator.data:
             return None
         api_mode = int(self.coordinator.data.mode)
@@ -130,17 +162,16 @@ class GulfstreamClimate(CoordinatorEntity[GulfstreamCoordinator], ClimateEntity)
         return preset
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
-        """Set a new HVAC mode (always clears spa preset)."""
-        preset = PRESET_NORMAL
-        api_mode = _HA_TO_MODE.get((hvac_mode, preset), Mode.OFF)
+        """Set HVAC mode. Always clears spa preset."""
+        api_mode = _HA_TO_MODE.get((hvac_mode, PRESET_NORMAL), Mode.OFF)
         await self._async_set_mode(api_mode)
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
-        """Set spa or normal preset."""
+        """Switch between normal (pool) and spa presets."""
         if preset_mode == PRESET_SPA:
             api_mode = Mode.SPA
         else:
-            # Return to pool heat when leaving spa
+            # Leaving spa: restore pool heat (or current non-spa hvac mode)
             current_hvac = self.hvac_mode or HVACMode.HEAT
             if current_hvac == HVACMode.OFF:
                 current_hvac = HVACMode.HEAT
@@ -148,17 +179,37 @@ class GulfstreamClimate(CoordinatorEntity[GulfstreamCoordinator], ClimateEntity)
         await self._async_set_mode(api_mode)
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
-        """Set a new target temperature."""
+        """Set target temperature with delivery verification."""
         temp = kwargs.get(ATTR_TEMPERATURE)
         if temp is None:
             return
-        await self.hass.async_add_executor_job(
-            self.coordinator.device.set_heat_setpoint, int(temp)
+        result = await self.hass.async_add_executor_job(
+            self.coordinator.device.set_heat_setpoint,
+            int(temp),
+            True,           # verify=True
+            _VERIFY_TIMEOUT,
         )
+        if not result.verified:
+            _LOGGER.warning(
+                "Setpoint command to %s not confirmed within %ds: %s",
+                self.coordinator.device.device_key,
+                _VERIFY_TIMEOUT,
+                result.error,
+            )
         await self.coordinator.async_request_refresh()
 
     async def _async_set_mode(self, mode: Mode) -> None:
-        await self.hass.async_add_executor_job(
-            self.coordinator.device.set_mode, mode
+        result = await self.hass.async_add_executor_job(
+            self.coordinator.device.set_mode,
+            mode,
+            True,           # verify=True
+            _VERIFY_TIMEOUT,
         )
+        if not result.verified:
+            _LOGGER.warning(
+                "Mode command to %s not confirmed within %ds: %s",
+                self.coordinator.device.device_key,
+                _VERIFY_TIMEOUT,
+                result.error,
+            )
         await self.coordinator.async_request_refresh()
