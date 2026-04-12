@@ -58,9 +58,11 @@ REG_ANTI_SHORT_CYCLE = "AXD"  # Anti-short-cycle delay (raw value)
 
 # Sensor / status registers (read-only from device)
 REG_SETPOINT = "RSV1"      # Current displayed setpoint
-REG_WATER_TEMP = "RSV2"    # Current water temperature
-REG_REMOTE_SENSOR = "RMT"  # Remote sensor reading
-REG_COIL_TEMP = "LCS"      # Coil temperature (raw value)
+REG_WATER_TEMP = "RMT"     # Current water temperature (displayed in app)
+REG_WATER_TEMP_2 = "RSV2"  # Secondary water temp reading (lagging/averaged?)
+REG_REMOTE_SENSOR = "RMT"  # Same as water temp on pool heaters
+REG_COIL_TEMP = "GEN15"    # Coil temperature (confirmed via app)
+REG_LCS = "LCS"            # Unknown sensor (was misidentified as coil temp)
 REG_FAULT = "FLT"          # Fault code
 
 # Defrost registers

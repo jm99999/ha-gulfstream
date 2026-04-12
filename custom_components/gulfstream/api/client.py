@@ -161,7 +161,7 @@ class GulfstreamClient:
             server_time=detail.get("server_time", ""),
             mode=Mode(cs.get("MD", 0)),
             setpoint=cs.get("RSV1", 0),
-            water_temp=cs.get("RSV2", 0),
+            water_temp=cs.get("RMT", 0),
             locked=cs.get("LKD", 0) != 0,
             max_heat=cs.get("MXH", 104),
             min_heat=cs.get("MNH", 50),
