@@ -1,0 +1,10 @@
+{
+  "domain": "gulfstream",
+  "name": "Gulfstream Pool Heat Pump",
+  "version": "0.1.0",
+  "documentation": "https://github.com/jm99999/ha-gulfstream",
+  "requirements": ["requests>=2.28.0"],
+  "codeowners": ["@jm99999"],
+  "iot_class": "cloud_polling",
+  "config_flow": true
+}

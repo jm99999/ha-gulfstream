@@ -1,0 +1,30 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Gulfstream Pool Heat Pump",
+        "description": "Enter your Compass WiFi / gulfstream.com account credentials.",
+        "data": {
+          "username": "Username",
+          "password": "Password"
+        }
+      },
+      "device": {
+        "title": "Select Device",
+        "description": "Multiple devices found on this account. Select one to add.",
+        "data": {
+          "device_key": "Device"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid username or password.",
+      "cannot_connect": "Cannot connect to the Gulfstream cloud service.",
+      "no_devices": "No devices found on this account.",
+      "unknown": "Unexpected error. See logs for details."
+    },
+    "abort": {
+      "already_configured": "This device is already configured."
+    }
+  }
+}
