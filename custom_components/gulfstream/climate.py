@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Any
 
 from homeassistant.components.climate import (
@@ -22,10 +23,13 @@ from .const import (
     CONF_DEVICE_KEY,
     CONF_DEVICE_NAME,
     DOMAIN,
+    FAULT_CODE_UNKNOWN,
+    FAULT_CODES,
     MANUFACTURER,
     MODEL,
     PRESET_NORMAL,
     PRESET_SPA,
+    STALE_THRESHOLD_SECONDS,
 )
 from .coordinator import GulfstreamCoordinator
 
@@ -125,8 +129,20 @@ class GulfstreamClimate(CoordinatorEntity[GulfstreamCoordinator], ClimateEntity)
 
     @property
     def current_temperature(self) -> float | None:
-        """Current water temperature (RSV2 register)."""
-        return self.coordinator.data.water_temp if self.coordinator.data else None
+        """Current water temperature — None when offline or no water flow.
+
+        Mirrors the same suppression logic as GulfstreamWaterTempSensor so
+        the thermostat card doesn't display a stale or pipe-water reading.
+        """
+        data = self.coordinator.data
+        if not data:
+            return None
+        if not _is_recent(data.last_online, data.server_time, STALE_THRESHOLD_SECONDS):
+            return None
+        fault_state = FAULT_CODES.get(data.registers.get("FLT", 0), FAULT_CODE_UNKNOWN)
+        if fault_state == "no_flow":
+            return None
+        return float(data.water_temp)
 
     @property
     def target_temperature(self) -> float | None:
@@ -213,3 +229,13 @@ class GulfstreamClimate(CoordinatorEntity[GulfstreamCoordinator], ClimateEntity)
                 result.error,
             )
         await self.coordinator.async_request_refresh()
+
+
+def _is_recent(last_online: str, server_time: str, threshold: int) -> bool:
+    """Return True if last_online is within threshold seconds of server_time."""
+    try:
+        last = datetime.strptime(last_online, "%Y-%m-%d %H:%M:%S")
+        server = datetime.strptime(server_time, "%Y-%m-%d %H:%M:%S")
+        return (server - last).total_seconds() < threshold
+    except (ValueError, TypeError):
+        return False

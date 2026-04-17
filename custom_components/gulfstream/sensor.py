@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -23,6 +25,7 @@ from .const import (
     FAULT_DESCRIPTIONS,
     MANUFACTURER,
     MODEL,
+    STALE_THRESHOLD_SECONDS,
 )
 from .coordinator import GulfstreamCoordinator
 
@@ -61,11 +64,18 @@ class _GulfstreamSensor(CoordinatorEntity[GulfstreamCoordinator], SensorEntity):
 
 
 class GulfstreamWaterTempSensor(_GulfstreamSensor):
-    """Current water temperature (RSV2 register).
+    """Current water temperature (RMT register).
 
-    Redundant with the climate entity's current_temperature, but exposing
-    it as a separate sensor gives long-term statistics in the HA recorder
-    and makes it easy to use in dashboards and automations.
+    Returns None — shown as "unknown" and excluded from history graphs — when:
+
+    - The device is offline (WiFi module hasn't checked in within
+      STALE_THRESHOLD_SECONDS). Stale data isn't pool temperature.
+    - The pool circulation pump is off (no_flow fault). Without water
+      flowing through the heat exchanger the sensor reads the temperature
+      of stagnant water in the pipe, not the pool itself.
+
+    When the state is unknown HA's recorder skips the data point entirely,
+    so history graphs won't show misleading flat lines or dips.
     """
 
     _attr_name = "Water Temperature"
@@ -79,7 +89,20 @@ class GulfstreamWaterTempSensor(_GulfstreamSensor):
 
     @property
     def native_value(self) -> int | None:
-        return self.coordinator.data.water_temp if self.coordinator.data else None
+        data = self.coordinator.data
+        if not data:
+            return None
+
+        # Stale connection — data is too old to represent the pool temperature.
+        if not _is_recent(data.last_online, data.server_time, STALE_THRESHOLD_SECONDS):
+            return None
+
+        # No water flow — sensor reads pipe water, not pool water.
+        fault_state = FAULT_CODES.get(data.registers.get("FLT", 0), FAULT_CODE_UNKNOWN)
+        if fault_state == "no_flow":
+            return None
+
+        return data.water_temp
 
 
 class GulfstreamFaultSensor(_GulfstreamSensor):
@@ -143,3 +166,13 @@ class GulfstreamFaultSensor(_GulfstreamSensor):
             return "mdi:alert-circle-outline"
         flt = self.coordinator.data.registers.get("FLT", 0)
         return "mdi:alert-circle" if flt != 0 else "mdi:check-circle"
+
+
+def _is_recent(last_online: str, server_time: str, threshold: int) -> bool:
+    """Return True if last_online is within threshold seconds of server_time."""
+    try:
+        last = datetime.strptime(last_online, "%Y-%m-%d %H:%M:%S")
+        server = datetime.strptime(server_time, "%Y-%m-%d %H:%M:%S")
+        return (server - last).total_seconds() < threshold
+    except (ValueError, TypeError):
+        return False
