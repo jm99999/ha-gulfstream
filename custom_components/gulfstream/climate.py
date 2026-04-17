@@ -20,6 +20,8 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .api.constants import Mode
 from .const import (
+    CONF_AUTO_ENABLED,
+    CONF_COOL_ENABLED,
     CONF_DEVICE_KEY,
     CONF_DEVICE_NAME,
     DOMAIN,
@@ -107,7 +109,6 @@ class GulfstreamClimate(CoordinatorEntity[GulfstreamCoordinator], ClimateEntity)
     _attr_name = None  # entity name = device name (HA primary-feature convention)
     _attr_temperature_unit = UnitOfTemperature.FAHRENHEIT
     _attr_target_temperature_step = 1.0
-    _attr_hvac_modes = [HVACMode.OFF, HVACMode.HEAT, HVACMode.COOL, HVACMode.HEAT_COOL]
     _attr_preset_modes = [PRESET_NORMAL, PRESET_SPA]
     _attr_supported_features = (
         ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.PRESET_MODE
@@ -117,6 +118,7 @@ class GulfstreamClimate(CoordinatorEntity[GulfstreamCoordinator], ClimateEntity)
         self, coordinator: GulfstreamCoordinator, entry: ConfigEntry
     ) -> None:
         super().__init__(coordinator)
+        self._entry = entry
         device_key = entry.data[CONF_DEVICE_KEY]
         device_name = entry.data[CONF_DEVICE_NAME]
         self._attr_unique_id = f"{device_key}_climate"
@@ -126,6 +128,16 @@ class GulfstreamClimate(CoordinatorEntity[GulfstreamCoordinator], ClimateEntity)
             manufacturer=MANUFACTURER,
             model=MODEL,
         )
+
+    @property
+    def hvac_modes(self) -> list[HVACMode]:
+        """Available modes — only includes cool/auto if enabled in options."""
+        modes = [HVACMode.OFF, HVACMode.HEAT]
+        if self._entry.options.get(CONF_COOL_ENABLED, False):
+            modes.append(HVACMode.COOL)
+        if self._entry.options.get(CONF_AUTO_ENABLED, False):
+            modes.append(HVACMode.HEAT_COOL)
+        return modes
 
     @property
     def current_temperature(self) -> float | None:
