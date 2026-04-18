@@ -7,16 +7,13 @@ CONF_DEVICE_NAME = "device_name"
 
 UPDATE_INTERVAL = 30  # seconds between state polls
 
-# A device is considered stale/offline if it hasn't checked in within this many seconds.
-# The WiFi module normally polls the server every 3–10 seconds, so 3 minutes is
-# generous enough to survive transient connectivity issues without false alarms.
+# A device is considered stale/offline if last_online is more than this many
+# seconds behind server_time. The WiFi module normally polls every 3–10 s;
+# 60 s is the threshold the bundled API library uses for is_online.
 STALE_THRESHOLD_SECONDS = 60
 
 MANUFACTURER = "Gulfstream / ICM Controls"
 MODEL = "Pool Heat Pump"
-
-PRESET_NORMAL = "normal"
-PRESET_SPA = "spa"
 
 # ---------------------------------------------------------------------------
 # Fault register (FLT) code → human-readable description.

@@ -98,8 +98,9 @@ class GulfstreamWaterTempSensor(_GulfstreamSensor):
             return None
 
         # No water flow — sensor reads pipe water, not pool water.
-        fault_state = FAULT_CODES.get(data.registers.get("FLT", 0), FAULT_CODE_UNKNOWN)
-        if fault_state == "no_flow":
+        # CHGF is the authoritative flow indicator (0 = flow, 8 = no flow);
+        # this covers both scheduled pump-off and genuine no-flow faults.
+        if data.registers.get("CHGF", 0) != 0:
             return None
 
         return data.water_temp

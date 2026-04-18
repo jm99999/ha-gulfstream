@@ -31,34 +31,31 @@ from .const import (
     CONF_DEVICE_KEY,
     CONF_DEVICE_NAME,
     DOMAIN,
-    FAULT_CODE_UNKNOWN,
-    FAULT_CODES,
     MANUFACTURER,
     MODEL,
-    PRESET_NORMAL,
-    PRESET_SPA,
     STALE_THRESHOLD_SECONDS,
 )
 from .coordinator import GulfstreamCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-# Map device Mode → (HVACMode, preset)
-_MODE_TO_HA: dict[int, tuple[HVACMode, str]] = {
-    Mode.OFF:        (HVACMode.OFF,       PRESET_NORMAL),
-    Mode.POOL_HEAT:  (HVACMode.HEAT,      PRESET_NORMAL),
-    Mode.POOL_COOL:  (HVACMode.COOL,      PRESET_NORMAL),
-    Mode.POOL_AUTO:  (HVACMode.HEAT_COOL, PRESET_NORMAL),
-    Mode.SPA:        (HVACMode.HEAT,      PRESET_SPA),
+# Device Mode → HVACMode. Spa maps to HEAT because HA's climate model
+# has no native spa concept; use the Mode select entity to enter spa.
+_MODE_TO_HVAC: dict[int, HVACMode] = {
+    Mode.OFF:        HVACMode.OFF,
+    Mode.POOL_HEAT:  HVACMode.HEAT,
+    Mode.POOL_COOL:  HVACMode.COOL,
+    Mode.POOL_AUTO:  HVACMode.HEAT_COOL,
+    Mode.SPA:        HVACMode.HEAT,
 }
 
-# Map (HVACMode, preset) → device Mode
-_HA_TO_MODE: dict[tuple[HVACMode, str], Mode] = {
-    (HVACMode.OFF,       PRESET_NORMAL): Mode.OFF,
-    (HVACMode.HEAT,      PRESET_NORMAL): Mode.POOL_HEAT,
-    (HVACMode.COOL,      PRESET_NORMAL): Mode.POOL_COOL,
-    (HVACMode.HEAT_COOL, PRESET_NORMAL): Mode.POOL_AUTO,
-    (HVACMode.HEAT,      PRESET_SPA):    Mode.SPA,
+# HVACMode selected via the climate card → device Mode. Climate never
+# sends SPA — that's reachable only through the Mode select entity.
+_HVAC_TO_MODE: dict[HVACMode, Mode] = {
+    HVACMode.OFF:        Mode.OFF,
+    HVACMode.HEAT:       Mode.POOL_HEAT,
+    HVACMode.COOL:       Mode.POOL_COOL,
+    HVACMode.HEAT_COOL:  Mode.POOL_AUTO,
 }
 
 # Verification timeout — long enough to cover the full server→device→server
@@ -81,58 +78,43 @@ class GulfstreamClimate(CoordinatorEntity[GulfstreamCoordinator], ClimateEntity)
 
     Modes
     -----
-    The device supports five operating modes:
+    The device supports five operating modes. Climate maps them as follows:
 
-    =====================  ================  ===========
-    Device mode            HA HVAC mode      HA preset
-    =====================  ================  ===========
-    Off                    off               normal
-    Pool Heat              heat              normal
-    Pool Cool              cool              normal   *
-    Pool Heat/Cool (Auto)  heat_cool         normal   *
-    Spa                    heat              spa
-    =====================  ================  ===========
+    =====================  ================
+    Device mode            HA HVAC mode
+    =====================  ================
+    Off                    off
+    Pool Heat              heat
+    Pool Cool              cool       *
+    Pool Heat/Cool (Auto)  heat_cool  *
+    Spa                    heat  (display-only, set via Mode select entity)
+    =====================  ================
 
     (*) Pool Cool and Pool Heat/Cool are only shown when the device reports
-    them as enabled (DF1 / DF2 registers). This is read directly from the
-    device state on every poll — no manual configuration required.
+    them as enabled (DF1 / DF2 registers).
 
-    Pool Heat and Pool Cool share the RSV1 setpoint register, so changing
-    the setpoint in one mode overwrites the other. Only Spa has its own
-    independent setpoint (RSV2).
+    Because HA's climate model has no "spa" mode, Spa is selected through
+    the companion Mode select entity. When the device is in Spa mode, this
+    climate entity shows HEAT; its target temperature reflects the spa
+    setpoint (RSV2); and adjusting the temperature writes RSV2. Picking any
+    HEAT/COOL mode in the climate card exits spa and enters the chosen
+    pool mode.
 
-    HVAC action
-    -----------
-    Reflects actual operation, not just the mode knob:
-
-    - OFF: unit is switched off
-    - IDLE (waiting for flow): mode is on but pool pump is off (CHGF != 0).
-      This is a normal scheduled event, not a fault.
-    - IDLE (at setpoint): mode is on, pump is running, water temp has reached
-      the setpoint
-    - HEATING / COOLING: actively conditioning water
-
-    Command verification
-    --------------------
-    All mode and setpoint changes are sent with verify=True (timeout 60 s).
-    The library polls the device until it confirms the register changed, or
-    times out. Outcomes are handled differently:
-
-    - VERIFIED: state matches intent
-    - CONFLICT: another user/app changed the setting concurrently; log warning,
-      refresh to show the actual value, do not retry
-    - FAILED: device did not apply the change within timeout; log error,
-      refresh — surface the failure and let the user try again
+    Shadow / pending state
+    ----------------------
+    Commands take 5–30 s (up to 60 s) to reach the device. While a
+    command is in flight, the entity reports the requested value (with
+    ``assumed_state = True`` so the UI renders it as pending) rather than
+    the stale device-reported value. When the command completes —
+    verified, conflicted, or timed out — the pending value is cleared and
+    the entity snaps to the actual device state.
     """
 
     _attr_has_entity_name = True
     _attr_name = None  # entity name = device name (HA primary-feature convention)
     _attr_temperature_unit = UnitOfTemperature.FAHRENHEIT
     _attr_target_temperature_step = 1.0
-    _attr_preset_modes = [PRESET_NORMAL, PRESET_SPA]
-    _attr_supported_features = (
-        ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.PRESET_MODE
-    )
+    _attr_supported_features = ClimateEntityFeature.TARGET_TEMPERATURE
 
     def __init__(
         self, coordinator: GulfstreamCoordinator, entry: ConfigEntry
@@ -148,6 +130,33 @@ class GulfstreamClimate(CoordinatorEntity[GulfstreamCoordinator], ClimateEntity)
             model=MODEL,
         )
 
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _effective_mode(self) -> Mode | None:
+        """Mode to render: pending if set, else actual device mode."""
+        if self.coordinator.pending_mode is not None:
+            return self.coordinator.pending_mode
+        if self.coordinator.data is not None:
+            return Mode(int(self.coordinator.data.mode))
+        return None
+
+    def _is_spa(self) -> bool:
+        return self._effective_mode() == Mode.SPA
+
+    # ------------------------------------------------------------------
+    # State / display
+    # ------------------------------------------------------------------
+
+    @property
+    def assumed_state(self) -> bool:
+        """True while a command is in flight awaiting device confirmation."""
+        return (
+            self.coordinator.pending_mode is not None
+            or self.coordinator.pending_setpoint is not None
+        )
+
     @property
     def hvac_modes(self) -> list[HVACMode]:
         """Available modes — derived from device registers (DF1/DF2)."""
@@ -161,21 +170,31 @@ class GulfstreamClimate(CoordinatorEntity[GulfstreamCoordinator], ClimateEntity)
         return modes
 
     @property
+    def hvac_mode(self) -> HVACMode | None:
+        mode = self._effective_mode()
+        if mode is None:
+            return None
+        return _MODE_TO_HVAC.get(int(mode), HVACMode.OFF)
+
+    @property
     def hvac_action(self) -> HVACAction | None:
-        """Actual operating state of the heat pump."""
+        """Actual operating state of the heat pump.
+
+        Shadow state does not drive hvac_action — this should always
+        reflect what the device actually reports.
+        """
         data = self.coordinator.data
         if not data:
             return None
         mode = int(data.mode)
         if mode == Mode.OFF:
             return HVACAction.OFF
-        # Pool pump is off — heat pump can't run; this is a scheduled normal state.
+        # Pool pump off → scheduled idle, not a fault.
         if data.registers.get("CHGF", 0) != 0:
             return HVACAction.IDLE
         # Hardware fault — heat pump stopped itself.
         if data.registers.get("FLT", 0) != 0:
             return HVACAction.IDLE
-        # Running: determine direction from water temp vs setpoint.
         water = data.water_temp
         setpoint = data.setpoint
         if mode == Mode.POOL_COOL:
@@ -194,150 +213,141 @@ class GulfstreamClimate(CoordinatorEntity[GulfstreamCoordinator], ClimateEntity)
         data = self.coordinator.data
         if not data:
             return {}
+        attrs: dict[str, Any] = {}
         chgf = data.registers.get("CHGF", 0)
         flt = data.registers.get("FLT", 0)
         if chgf != 0 and flt == 0:
-            return {"status": "waiting_for_flow"}
-        if flt != 0:
-            return {"status": "fault"}
-        return {}
+            attrs["status"] = "waiting_for_flow"
+        elif flt != 0:
+            attrs["status"] = "fault"
+        if self.coordinator.pending_mode is not None:
+            attrs["pending_mode"] = self.coordinator.pending_mode.name
+        if self.coordinator.pending_setpoint is not None:
+            attrs["pending_setpoint"] = self.coordinator.pending_setpoint
+        return attrs
 
     @property
     def current_temperature(self) -> float | None:
-        """Current water temperature — None when offline or no water flow.
+        """Current water temperature — None when offline or no flow.
 
-        Mirrors the same suppression logic as GulfstreamWaterTempSensor so
-        the thermostat card doesn't display a stale or pipe-water reading.
+        When the pool pump is off (CHGF != 0) the water sensor reads
+        stagnant pipe water, not pool water. Same suppression applies
+        when the device connection is stale.
         """
         data = self.coordinator.data
         if not data:
             return None
         if not _is_recent(data.last_online, data.server_time, STALE_THRESHOLD_SECONDS):
             return None
-        fault_state = FAULT_CODES.get(data.registers.get("FLT", 0), FAULT_CODE_UNKNOWN)
-        if fault_state == "no_flow":
+        if data.registers.get("CHGF", 0) != 0:
             return None
         return float(data.water_temp)
 
     @property
     def target_temperature(self) -> float | None:
-        """Active setpoint — RSV1 (pool) or RSV2 (spa) depending on mode."""
+        """Active setpoint — pending value while a command is in flight,
+        otherwise the register that matches the current mode (RSV1 for
+        pool modes, RSV2 for spa)."""
+        if self.coordinator.pending_setpoint is not None:
+            return float(self.coordinator.pending_setpoint)
         return self.coordinator.data.setpoint if self.coordinator.data else None
 
     @property
     def min_temp(self) -> float:
-        """Minimum setpoint for the active mode."""
-        if self.preset_mode == PRESET_SPA:
+        if self._is_spa():
             return float(SPA_SETPOINT_MIN)
         return float(POOL_SETPOINT_MIN)
 
     @property
     def max_temp(self) -> float:
-        """Maximum setpoint for the active mode.
-
-        Pool modes are capped at 100°F (app-enforced limit), even though the
-        hardware supports 104°F. Spa mode allows the full 104°F range.
-        """
-        if self.preset_mode == PRESET_SPA:
+        """Mode-specific maximum: pool 100 °F (app cap), spa 104 °F (hardware cap)."""
+        if self._is_spa():
             return float(SPA_SETPOINT_MAX)
         return float(POOL_SETPOINT_MAX)
 
-    @property
-    def hvac_mode(self) -> HVACMode | None:
-        if not self.coordinator.data:
-            return None
-        api_mode = int(self.coordinator.data.mode)
-        hvac_mode, _ = _MODE_TO_HA.get(api_mode, (HVACMode.OFF, PRESET_NORMAL))
-        return hvac_mode
-
-    @property
-    def preset_mode(self) -> str | None:
-        if not self.coordinator.data:
-            return None
-        api_mode = int(self.coordinator.data.mode)
-        _, preset = _MODE_TO_HA.get(api_mode, (HVACMode.OFF, PRESET_NORMAL))
-        return preset
+    # ------------------------------------------------------------------
+    # Commands
+    # ------------------------------------------------------------------
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
-        """Set HVAC mode. Always clears spa preset."""
-        api_mode = _HA_TO_MODE.get((hvac_mode, PRESET_NORMAL), Mode.OFF)
-        await self._async_set_mode(api_mode)
-
-    async def async_set_preset_mode(self, preset_mode: str) -> None:
-        """Switch between normal (pool) and spa presets."""
-        if preset_mode == PRESET_SPA:
-            api_mode = Mode.SPA
-        else:
-            # Leaving spa: restore pool heat (or current non-spa hvac mode)
-            current_hvac = self.hvac_mode or HVACMode.HEAT
-            if current_hvac == HVACMode.OFF:
-                current_hvac = HVACMode.HEAT
-            api_mode = _HA_TO_MODE.get((current_hvac, PRESET_NORMAL), Mode.POOL_HEAT)
-        await self._async_set_mode(api_mode)
+        """Set HVAC mode. Never selects Spa — use the Mode select entity."""
+        api_mode = _HVAC_TO_MODE.get(hvac_mode, Mode.OFF)
+        await self._send_mode(api_mode)
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
         """Set target temperature with delivery verification.
 
-        Routes to set_spa_setpoint (RSV2) when in spa mode, or
-        set_heat_setpoint (RSV1) for all other modes. Raises
-        ServiceValidationError for values outside the mode's valid range.
+        Routes to set_spa_setpoint (RSV2) when the device is in spa mode,
+        set_heat_setpoint (RSV1) otherwise. Raises ServiceValidationError
+        for values outside the mode's valid range.
         """
         temp = kwargs.get(ATTR_TEMPERATURE)
         if temp is None:
             return
 
         temp_int = int(temp)
-        if self.preset_mode == PRESET_SPA:
+        is_spa = self._is_spa()
+
+        if is_spa:
             if not (SPA_SETPOINT_MIN <= temp_int <= SPA_SETPOINT_MAX):
                 raise ServiceValidationError(
                     f"Spa setpoint must be {SPA_SETPOINT_MIN}–{SPA_SETPOINT_MAX}°F, got {temp_int}"
                 )
-            result = await self.hass.async_add_executor_job(
-                self.coordinator.device.set_spa_setpoint,
-                temp_int,
-                True,
-                _VERIFY_TIMEOUT,
-            )
         else:
             if not (POOL_SETPOINT_MIN <= temp_int <= POOL_SETPOINT_MAX):
                 raise ServiceValidationError(
                     f"Pool setpoint must be {POOL_SETPOINT_MIN}–{POOL_SETPOINT_MAX}°F, got {temp_int}"
                 )
+
+        # Optimistic UI: show the target immediately, flagged as assumed.
+        self.coordinator.mark_pending_setpoint(temp_int)
+        try:
+            if is_spa:
+                result = await self.hass.async_add_executor_job(
+                    self.coordinator.device.set_spa_setpoint,
+                    temp_int,
+                    True,
+                    _VERIFY_TIMEOUT,
+                )
+            else:
+                result = await self.hass.async_add_executor_job(
+                    self.coordinator.device.set_heat_setpoint,
+                    temp_int,
+                    True,
+                    _VERIFY_TIMEOUT,
+                )
+            await self._handle_command_result(result, f"setpoint→{temp_int}°F")
+        finally:
+            self.coordinator.clear_pending_setpoint(temp_int)
+            await self.coordinator.async_request_refresh()
+
+    async def _send_mode(self, mode: Mode) -> None:
+        """Send a mode change, holding shadow state until confirmed."""
+        self.coordinator.mark_pending_mode(mode)
+        try:
             result = await self.hass.async_add_executor_job(
-                self.coordinator.device.set_heat_setpoint,
-                temp_int,
+                self.coordinator.device.set_mode,
+                mode,
                 True,
                 _VERIFY_TIMEOUT,
             )
-
-        await self._handle_command_result(result, f"setpoint→{temp_int}°F")
-        await self.coordinator.async_request_refresh()
-
-    async def _async_set_mode(self, mode: Mode) -> None:
-        result = await self.hass.async_add_executor_job(
-            self.coordinator.device.set_mode,
-            mode,
-            True,
-            _VERIFY_TIMEOUT,
-        )
-        await self._handle_command_result(result, f"mode→{mode.name}")
-        await self.coordinator.async_request_refresh()
+            await self._handle_command_result(result, f"mode→{mode.name}")
+        finally:
+            self.coordinator.clear_pending_mode(mode)
+            await self.coordinator.async_request_refresh()
 
     async def _handle_command_result(self, result: Any, description: str) -> None:
-        """Log the outcome of a command. CONFLICT and FAILED are handled differently."""
+        """Log command outcomes. Conflict and failure are handled differently."""
         device_key = self.coordinator.device.device_key
         if result.verified:
             return
         if result.conflict:
-            # Another user/app beat us to this register. Don't retry — just
-            # refresh so the UI shows the actual current value.
             _LOGGER.warning(
                 "Command '%s' on %s conflicted: another source set the register "
-                "to %s instead. Refreshing state.",
+                "to %s instead. Not retrying.",
                 description, device_key, result.actual_value,
             )
         else:
-            # Timed out or server rejected. Surface as error; user must retry.
             _LOGGER.error(
                 "Command '%s' on %s was not confirmed within %ds: %s",
                 description, device_key, _VERIFY_TIMEOUT, result.error,
