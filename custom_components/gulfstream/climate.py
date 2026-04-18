@@ -20,8 +20,6 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .api.constants import Mode
 from .const import (
-    CONF_AUTO_ENABLED,
-    CONF_COOL_ENABLED,
     CONF_DEVICE_KEY,
     CONF_DEVICE_NAME,
     DOMAIN,
@@ -87,15 +85,14 @@ class GulfstreamClimate(CoordinatorEntity[GulfstreamCoordinator], ClimateEntity)
     Spa                    heat              spa
     =====================  ================  ===========
 
-    (*) Pool Cool and Pool Heat/Cool must be **enabled** in the device's
-    System Configuration section of the Compass WiFi app before they
-    will have any effect. If they are disabled, commands to set those
-    modes will be accepted by the server but ignored by the heat pump.
+    (*) Pool Cool and Pool Heat/Cool are only shown when the device reports
+    them as enabled (DF1 / DF2 registers). This is read directly from the
+    device state on every poll — no manual configuration required.
 
     Spa mode is exposed as a preset (not a fifth HVAC mode) because HA's
     climate model does not have a native spa concept. Spa mode heats to a
-    separate setpoint — functionally identical to Pool Heat but with a
-    different temperature target.
+    separate setpoint (RSV2) — functionally identical to Pool Heat but with
+    a different temperature target.
 
     Command verification
     --------------------
@@ -118,7 +115,6 @@ class GulfstreamClimate(CoordinatorEntity[GulfstreamCoordinator], ClimateEntity)
         self, coordinator: GulfstreamCoordinator, entry: ConfigEntry
     ) -> None:
         super().__init__(coordinator)
-        self._entry = entry
         device_key = entry.data[CONF_DEVICE_KEY]
         device_name = entry.data[CONF_DEVICE_NAME]
         self._attr_unique_id = f"{device_key}_climate"
@@ -131,12 +127,14 @@ class GulfstreamClimate(CoordinatorEntity[GulfstreamCoordinator], ClimateEntity)
 
     @property
     def hvac_modes(self) -> list[HVACMode]:
-        """Available modes — only includes cool/auto if enabled in options."""
+        """Available modes — derived from device registers (DF1/DF2)."""
         modes = [HVACMode.OFF, HVACMode.HEAT]
-        if self._entry.options.get(CONF_COOL_ENABLED, False):
-            modes.append(HVACMode.COOL)
-        if self._entry.options.get(CONF_AUTO_ENABLED, False):
-            modes.append(HVACMode.HEAT_COOL)
+        data = self.coordinator.data
+        if data:
+            if data.pool_cool_enabled:
+                modes.append(HVACMode.COOL)
+            if data.pool_heat_cool_enabled:
+                modes.append(HVACMode.HEAT_COOL)
         return modes
 
     @property
@@ -158,7 +156,7 @@ class GulfstreamClimate(CoordinatorEntity[GulfstreamCoordinator], ClimateEntity)
 
     @property
     def target_temperature(self) -> float | None:
-        """Current heat setpoint (RSV1 register)."""
+        """Active setpoint — RSV1 (pool) or RSV2 (spa) depending on mode."""
         return self.coordinator.data.setpoint if self.coordinator.data else None
 
     @property
@@ -207,16 +205,30 @@ class GulfstreamClimate(CoordinatorEntity[GulfstreamCoordinator], ClimateEntity)
         await self._async_set_mode(api_mode)
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
-        """Set target temperature with delivery verification."""
+        """Set target temperature with delivery verification.
+
+        Routes to set_spa_setpoint (RSV2) when in spa mode, or
+        set_heat_setpoint (RSV1) for all other modes.
+        """
         temp = kwargs.get(ATTR_TEMPERATURE)
         if temp is None:
             return
-        result = await self.hass.async_add_executor_job(
-            self.coordinator.device.set_heat_setpoint,
-            int(temp),
-            True,           # verify=True
-            _VERIFY_TIMEOUT,
-        )
+
+        if self.preset_mode == PRESET_SPA:
+            result = await self.hass.async_add_executor_job(
+                self.coordinator.device.set_spa_setpoint,
+                int(temp),
+                True,           # verify=True
+                _VERIFY_TIMEOUT,
+            )
+        else:
+            result = await self.hass.async_add_executor_job(
+                self.coordinator.device.set_heat_setpoint,
+                int(temp),
+                True,           # verify=True
+                _VERIFY_TIMEOUT,
+            )
+
         if not result.verified:
             _LOGGER.warning(
                 "Setpoint command to %s not confirmed within %ds: %s",

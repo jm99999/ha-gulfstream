@@ -42,7 +42,7 @@ Quick start::
 """
 
 from .client import GulfstreamClient
-from .constants import Mode
+from .constants import Mode, DefrostMode
 from .device import Device
 from .exceptions import (
     AccessDeniedError,
@@ -61,6 +61,7 @@ __all__ = [
     "GulfstreamClient",
     "Device",
     "Mode",
+    "DefrostMode",
     "DeviceInfo",
     "DeviceState",
     "CommandResult",

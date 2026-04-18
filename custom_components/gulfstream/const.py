@@ -4,8 +4,6 @@ DOMAIN = "gulfstream"
 
 CONF_DEVICE_KEY = "device_key"
 CONF_DEVICE_NAME = "device_name"
-CONF_COOL_ENABLED = "cool_enabled"
-CONF_AUTO_ENABLED = "auto_enabled"
 
 UPDATE_INTERVAL = 30  # seconds between state polls
 

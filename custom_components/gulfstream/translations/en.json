@@ -26,17 +26,5 @@
     "abort": {
       "already_configured": "This device is already configured."
     }
-  },
-  "options": {
-    "step": {
-      "init": {
-        "title": "Gulfstream Modes",
-        "description": "Enable the modes that are turned on in your device's System Configuration (Compass WiFi app → System Configuration).",
-        "data": {
-          "cool_enabled": "Pool Cool mode enabled",
-          "auto_enabled": "Pool Heat/Cool (Auto) mode enabled"
-        }
-      }
-    }
   }
 }

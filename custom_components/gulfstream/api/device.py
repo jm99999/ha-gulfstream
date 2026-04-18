@@ -20,9 +20,10 @@ from .constants import (
     DEFAULT_VERIFY_INTERVAL,
     DEFAULT_VERIFY_TIMEOUT,
     Mode,
-    REG_LOCK_DISABLE,
+    REG_PANEL_LOCK,
     REG_MODE,
     REG_SETPOINT,
+    REG_SPA_SETPOINT,
 )
 from .models import CommandResult, CommandStatus, DeviceInfo, DeviceState
 
@@ -113,34 +114,19 @@ class Device:
         timeout: float = DEFAULT_VERIFY_TIMEOUT,
         interval: float = DEFAULT_VERIFY_INTERVAL,
     ) -> CommandResult:
-        """Change the heat setpoint.
+        """Change the pool heat setpoint (RSV1).
 
         Sends ``thermostatSetModeData`` with the new temperature in the
         heat-setpoint position.  The current mode is preserved.
 
         Args:
-            temperature: Target temperature in °F (typically 50--104).
+            temperature: Target temperature in °F (typically 50--100).
             verify: If True, block until the device confirms the change.
             timeout: Max seconds to wait when ``verify=True``.
             interval: Seconds between verification polls.
 
         Returns:
             A :class:`CommandResult` that tracks delivery status.
-
-        Example::
-
-            # Fire and forget
-            dev.set_heat_setpoint(88)
-
-            # Block until confirmed
-            result = dev.set_heat_setpoint(88, verify=True)
-            assert result.verified
-
-            # Check later
-            result = dev.set_heat_setpoint(88)
-            # ... later ...
-            if result.wait(timeout=30):
-                print("Done")
         """
         current_mode = self._get_current_mode()
         mode_data = [current_mode, 0, temperature, 0, 0, 0]
@@ -150,6 +136,31 @@ class Device:
 
         if verify and result.pending:
             result.wait(timeout=timeout, interval=interval)
+        return result
+
+    def set_spa_setpoint(
+        self,
+        temperature: int,
+        verify: bool = False,
+        timeout: float = DEFAULT_VERIFY_TIMEOUT,
+        interval: float = DEFAULT_VERIFY_INTERVAL,
+    ) -> CommandResult:
+        """Change the spa setpoint (RSV2).
+
+        Uses ``thermostatSetFields`` to write directly to the RSV2 register,
+        which holds the spa setpoint independently from the pool setpoint.
+
+        Args:
+            temperature: Target temperature in °F (typically 50--104).
+            verify: If True, block until the device confirms the change.
+            timeout: Max seconds to wait when ``verify=True``.
+            interval: Seconds between verification polls.
+
+        Returns:
+            A :class:`CommandResult` that tracks delivery status.
+        """
+        result = self._set_field(
+            REG_SPA_SETPOINT, temperature, verify=verify, timeout=timeout)
         return result
 
     def set_mode(
@@ -187,11 +198,14 @@ class Device:
     ) -> CommandResult:
         """Lock the physical control panel on the heat pump.
 
+        Writes 2 to the ``HUNC`` register.  Empirically the app uses 2 (not
+        1) for the locked state -- possibly encoding a lock level or source.
+
         Returns:
             A :class:`CommandResult`.
         """
         return self._set_field(
-            REG_LOCK_DISABLE, 1, verify=verify, timeout=timeout)
+            REG_PANEL_LOCK, 2, verify=verify, timeout=timeout)
 
     def unlock(
         self,
@@ -204,7 +218,7 @@ class Device:
             A :class:`CommandResult`.
         """
         return self._set_field(
-            REG_LOCK_DISABLE, 0, verify=verify, timeout=timeout)
+            REG_PANEL_LOCK, 0, verify=verify, timeout=timeout)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -222,7 +236,6 @@ class Device:
         detection can distinguish "changed to a different value" (another
         user) from "didn't change at all" (command lost in queue).
         """
-        # Snapshot the current value for conflict detection.
         value_before = self._read_register(verify_register)
 
         result = CommandResult(
@@ -327,8 +340,8 @@ class Device:
         return int(state.mode)
 
     def _get_current_setpoint(self) -> int:
-        """Get the current setpoint, refreshing if needed."""
+        """Get the current pool setpoint (RSV1), refreshing if needed."""
         if self._last_state is not None:
-            return self._last_state.setpoint
+            return self._last_state.pool_setpoint
         state = self.refresh()
-        return state.setpoint
+        return state.pool_setpoint

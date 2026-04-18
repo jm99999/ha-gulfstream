@@ -39,7 +39,16 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 
-from .constants import Mode, REG_SETPOINT, REG_WATER_TEMP, REG_MODE
+from .constants import (
+    Mode, DefrostMode, decode_cal,
+    REG_SETPOINT, REG_WATER_TEMP, REG_MODE, REG_COIL_TEMP,
+    REG_POOL_COOL_ENABLED, REG_POOL_HEAT_COOL_ENABLED,
+    REG_REMOTE_TSTAT_ENABLED, REG_REMOTE_HEAT_COOL_ENABLED,
+    REG_DEADBAND, REG_ANTI_SHORT_CYCLE, REG_WATER_CAL, REG_EVAP_CAL,
+    REG_DEFROST_END, REG_DEFROST_MODE,
+    REG_SPA_TIMER_HOURS, REG_SPA_TIMER_MINUTES,
+    REG_SPA_SETPOINT, REG_SETPOINT, REG_PANEL_LOCK,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -101,8 +110,9 @@ class DeviceState:
             e.g. ``"2026-04-11 21:51:29"``.
         server_time: The server's current time when this state was fetched.
         mode: Current operating mode (:class:`Mode` enum).
-        setpoint: Displayed heat setpoint in degrees (RSV1 register).
-        water_temp: Current water temperature in degrees (RSV2 register).
+        setpoint: Active setpoint in degrees -- RSV1 for pool modes, RSV2
+            for spa mode.
+        water_temp: Current water temperature in degrees (RMT register).
         locked: True if the physical control panel buttons are locked.
         max_heat: Maximum allowed heat setpoint (hardware limit, typically 104).
         min_heat: Minimum allowed heat setpoint (hardware limit, typically 50).
@@ -145,6 +155,127 @@ class DeviceState:
             Mode.SPA: "Spa",
         }
         return labels.get(self.mode, f"Unknown ({self.mode})")
+
+    # --- Mode-specific setpoints ---
+    #
+    # The controller maintains TWO setpoint memories:
+    #   - RSV1: Pool setpoint (shared between Pool Heat and Pool Cool modes)
+    #   - RSV2: Spa setpoint (separate)
+    # When switching between Pool Heat and Pool Cool, the same RSV1 is used,
+    # so adjusting the setpoint in one mode overwrites the other. Only Spa
+    # has its own independent memory.
+
+    @property
+    def pool_setpoint(self) -> int:
+        """Pool setpoint in °F (shared by Pool Heat and Pool Cool modes, register RSV1)."""
+        return self.registers.get(REG_SETPOINT, 0)
+
+    @property
+    def spa_setpoint(self) -> int:
+        """Spa setpoint in °F (separate memory from Pool setpoint, register RSV2)."""
+        return self.registers.get(REG_SPA_SETPOINT, 0)
+
+    # --- Other readings and configuration ---
+
+    @property
+    def coil_temp(self) -> int:
+        """Coil/evaporator temperature (°F). Drops near freezing triggers defrost."""
+        return self.registers.get(REG_COIL_TEMP, 0)
+
+    @property
+    def pool_cool_enabled(self) -> bool:
+        """True if Pool Cool mode is enabled in the settings."""
+        return self.registers.get(REG_POOL_COOL_ENABLED, 0) != 0
+
+    @property
+    def pool_heat_cool_enabled(self) -> bool:
+        """True if Pool Heat/Cool (auto) mode is enabled in the settings."""
+        return self.registers.get(REG_POOL_HEAT_COOL_ENABLED, 0) != 0
+
+    @property
+    def remote_tstat_enabled(self) -> bool:
+        """True if Remote TSTAT is enabled.
+
+        Note: this toggle has no known functional effect on Gulfstream pool
+        heaters -- it exists because the backend was designed for HVAC
+        thermostats.
+        """
+        return self.registers.get(REG_REMOTE_TSTAT_ENABLED, 0) != 0
+
+    @property
+    def remote_heat_cool_enabled(self) -> bool:
+        """True if Remote Heat/Cool is enabled.
+
+        Note: this toggle has no known functional effect on Gulfstream pool
+        heaters. The underlying register (VH) is dual-purpose and may also
+        encode Spa Timer state.
+        """
+        return self.registers.get(REG_REMOTE_HEAT_COOL_ENABLED, 0) != 0
+
+    # --- Numeric configuration (confirmed) ---
+
+    @property
+    def deadband(self) -> int:
+        """Pool Heat/Cool deadband in °F (temperature hysteresis)."""
+        return self.registers.get(REG_DEADBAND, 0)
+
+    @property
+    def anti_short_cycle_minutes(self) -> int:
+        """Anti-short-cycle delay in minutes."""
+        return self.registers.get(REG_ANTI_SHORT_CYCLE, 0)
+
+    @property
+    def water_sensor_calibration(self) -> int:
+        """Water sensor calibration offset in °F (typically -5 to +5)."""
+        return decode_cal(self.registers.get(REG_WATER_CAL, 10))
+
+    @property
+    def evap_sensor_calibration(self) -> int:
+        """Evaporator sensor calibration offset in °F (typically -5 to +5)."""
+        return decode_cal(self.registers.get(REG_EVAP_CAL, 10))
+
+    @property
+    def defrost_end_temp(self) -> int:
+        """Defrost end temperature in °F."""
+        return self.registers.get(REG_DEFROST_END, 0)
+
+    @property
+    def defrost_mode(self) -> DefrostMode:
+        """Defrost mode: Reverse Cycle or Air Defrost."""
+        return DefrostMode(self.registers.get(REG_DEFROST_MODE, 0))
+
+    @property
+    def defrost_mode_text(self) -> str:
+        """Human-readable defrost mode string."""
+        return "Air Defrost" if self.defrost_mode == DefrostMode.AIR_DEFROST else "Reverse Cycle"
+
+    @property
+    def spa_timer_hours(self) -> int:
+        """Spa timer hours (0-20). 0 combined with spa_timer_minutes=0 means continuous."""
+        return self.registers.get(REG_SPA_TIMER_HOURS, 0)
+
+    @property
+    def spa_timer_minutes(self) -> int:
+        """Spa timer minutes component (0-59)."""
+        return self.registers.get(REG_SPA_TIMER_MINUTES, 0)
+
+    @property
+    def spa_timer_text(self) -> str:
+        """Human-readable spa timer.
+
+        Three possible states:
+        - ``"Off"`` -- DF3=0 and STOF=0 (timer disabled entirely)
+        - ``"Continuous"`` -- DF3=0 and STOF=1 (sentinel value; timer
+          enabled but never counts down)
+        - ``"{h} Hours {m} Min"`` -- countdown timer of the given duration
+        """
+        h = self.spa_timer_hours
+        m = self.spa_timer_minutes
+        if h == 0 and m == 0:
+            return "Off"
+        if h == 0 and m == 1:
+            return "Continuous"
+        return f"{h} Hours {m} Min"
 
 
 # ---------------------------------------------------------------------------
@@ -309,7 +440,6 @@ class CommandResult:
                 self.history.append((time.time(), actual))
 
                 if actual == self._verify_value:
-                    # The register holds exactly what we sent.
                     self.status = CommandStatus.VERIFIED
                     logger.info(
                         "Command verified: %s=%s on %s",
@@ -319,8 +449,6 @@ class CommandResult:
                 if (self.value_before is not None
                         and actual != self.value_before
                         and actual != self._verify_value):
-                    # The register changed, but NOT to our value.
-                    # Another user or process changed it concurrently.
                     self.status = CommandStatus.CONFLICT
                     self.error = (
                         f"Conflict: {self._verify_register} changed from "
@@ -351,13 +479,8 @@ class CommandResult:
         a conflict is detected (CONFLICT), or time runs out (FAILED).
 
         Args:
-            timeout: Maximum seconds to wait.  The server delivers
-                commands to devices within ~5--30 seconds when
-                working normally, but can silently drop commands.
-                A timeout of 30--60 seconds is recommended.
-            interval: Seconds between verification polls.  The device
-                checks in every ~5 seconds on average, so polling faster
-                than that adds server load without benefit.
+            timeout: Maximum seconds to wait.
+            interval: Seconds between verification polls.
 
         Returns:
             True if the command was verified, False if it timed out,
@@ -371,7 +494,6 @@ class CommandResult:
             if self.check():
                 return True
             if not self.pending:
-                # Resolved to conflict or error -- stop waiting
                 return False
             remaining = deadline - time.time()
             time.sleep(min(interval, max(0.1, remaining)))

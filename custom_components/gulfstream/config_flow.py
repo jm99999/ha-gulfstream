@@ -7,16 +7,13 @@ from typing import Any
 
 import voluptuous as vol
 
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult, OptionsFlow
+from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
-from homeassistant.core import callback
 
 from .api.client import GulfstreamClient
 from .api.exceptions import AuthenticationError, ServerError
 from .api.models import DeviceInfo
 from .const import (
-    CONF_COOL_ENABLED,
-    CONF_AUTO_ENABLED,
     CONF_DEVICE_KEY,
     CONF_DEVICE_NAME,
     DOMAIN,
@@ -34,11 +31,6 @@ class GulfstreamConfigFlow(ConfigFlow, domain=DOMAIN):
         self._username: str = ""
         self._password: str = ""
         self._devices: list[DeviceInfo] = []
-
-    @staticmethod
-    @callback
-    def async_get_options_flow(config_entry) -> GulfstreamOptionsFlow:
-        return GulfstreamOptionsFlow(config_entry)
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -115,42 +107,6 @@ class GulfstreamConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_DEVICE_KEY: device.unique_key,
                 CONF_DEVICE_NAME: device.name or device.unique_key,
             },
-        )
-
-
-class GulfstreamOptionsFlow(OptionsFlow):
-    """Options flow — lets the user configure which modes the device supports.
-
-    Pool Cool and Pool Heat/Cool (Auto) must be explicitly enabled in the
-    device's System Configuration via the Compass WiFi app before they will
-    have any effect on the heat pump. This options screen mirrors that
-    setting so HA only shows modes the device will actually respond to.
-    """
-
-    def __init__(self, config_entry) -> None:
-        self._config_entry = config_entry
-
-    async def async_step_init(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
-
-        current = self._config_entry.options
-        return self.async_show_form(
-            step_id="init",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(
-                        CONF_COOL_ENABLED,
-                        default=current.get(CONF_COOL_ENABLED, False),
-                    ): bool,
-                    vol.Required(
-                        CONF_AUTO_ENABLED,
-                        default=current.get(CONF_AUTO_ENABLED, False),
-                    ): bool,
-                }
-            ),
         )
 
 

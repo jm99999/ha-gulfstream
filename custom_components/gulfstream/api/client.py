@@ -156,13 +156,18 @@ class GulfstreamClient:
         detail = data.get("detail", {})
         cs = detail.get("currentState", {})
 
+        mode = Mode(cs.get("MD", 0))
+        # The app displays whichever setpoint register matches the current mode:
+        #   RSV1 = Pool setpoint (used by both Pool Heat and Pool Cool)
+        #   RSV2 = Spa setpoint (separate memory)
+        active_setpoint = cs.get("RSV2", 0) if mode == Mode.SPA else cs.get("RSV1", 0)
         return DeviceState(
             last_online=detail.get("last_online", ""),
             server_time=detail.get("server_time", ""),
-            mode=Mode(cs.get("MD", 0)),
-            setpoint=cs.get("RSV1", 0),
+            mode=mode,
+            setpoint=active_setpoint,
             water_temp=cs.get("RMT", 0),
-            locked=cs.get("LKD", 0) != 0,
+            locked=cs.get("HUNC", 0) != 0,
             max_heat=cs.get("MXH", 104),
             min_heat=cs.get("MNH", 50),
             registers=cs,
