@@ -9,16 +9,24 @@ from typing import Any
 from homeassistant.components.climate import (
     ClimateEntity,
     ClimateEntityFeature,
+    HVACAction,
     HVACMode,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .api.constants import Mode
+from .api.constants import (
+    Mode,
+    POOL_SETPOINT_MAX,
+    POOL_SETPOINT_MIN,
+    SPA_SETPOINT_MAX,
+    SPA_SETPOINT_MIN,
+)
 from .const import (
     CONF_DEVICE_KEY,
     CONF_DEVICE_NAME,
@@ -53,9 +61,9 @@ _HA_TO_MODE: dict[tuple[HVACMode, str], Mode] = {
     (HVACMode.HEAT,      PRESET_SPA):    Mode.SPA,
 }
 
-# Verification timeout for commands sent to the heat pump.
-# The device polls the server every 3–10 s; 30 s gives ~5 chances for delivery.
-_VERIFY_TIMEOUT = 30
+# Verification timeout — long enough to cover the full server→device→server
+# round trip (typically 5–30 s) with margin for slow server days.
+_VERIFY_TIMEOUT = 60
 
 
 async def async_setup_entry(
@@ -89,17 +97,32 @@ class GulfstreamClimate(CoordinatorEntity[GulfstreamCoordinator], ClimateEntity)
     them as enabled (DF1 / DF2 registers). This is read directly from the
     device state on every poll — no manual configuration required.
 
-    Spa mode is exposed as a preset (not a fifth HVAC mode) because HA's
-    climate model does not have a native spa concept. Spa mode heats to a
-    separate setpoint (RSV2) — functionally identical to Pool Heat but with
-    a different temperature target.
+    Pool Heat and Pool Cool share the RSV1 setpoint register, so changing
+    the setpoint in one mode overwrites the other. Only Spa has its own
+    independent setpoint (RSV2).
+
+    HVAC action
+    -----------
+    Reflects actual operation, not just the mode knob:
+
+    - OFF: unit is switched off
+    - IDLE (waiting for flow): mode is on but pool pump is off (CHGF != 0).
+      This is a normal scheduled event, not a fault.
+    - IDLE (at setpoint): mode is on, pump is running, water temp has reached
+      the setpoint
+    - HEATING / COOLING: actively conditioning water
 
     Command verification
     --------------------
-    All mode and setpoint changes are sent with verify=True (timeout 30 s).
+    All mode and setpoint changes are sent with verify=True (timeout 60 s).
     The library polls the device until it confirms the register changed, or
-    times out. A timeout or conflict is logged as a warning but does not
-    raise an error in HA (the next poll will reconcile state).
+    times out. Outcomes are handled differently:
+
+    - VERIFIED: state matches intent
+    - CONFLICT: another user/app changed the setting concurrently; log warning,
+      refresh to show the actual value, do not retry
+    - FAILED: device did not apply the change within timeout; log error,
+      refresh — surface the failure and let the user try again
     """
 
     _attr_has_entity_name = True
@@ -138,6 +161,48 @@ class GulfstreamClimate(CoordinatorEntity[GulfstreamCoordinator], ClimateEntity)
         return modes
 
     @property
+    def hvac_action(self) -> HVACAction | None:
+        """Actual operating state of the heat pump."""
+        data = self.coordinator.data
+        if not data:
+            return None
+        mode = int(data.mode)
+        if mode == Mode.OFF:
+            return HVACAction.OFF
+        # Pool pump is off — heat pump can't run; this is a scheduled normal state.
+        if data.registers.get("CHGF", 0) != 0:
+            return HVACAction.IDLE
+        # Hardware fault — heat pump stopped itself.
+        if data.registers.get("FLT", 0) != 0:
+            return HVACAction.IDLE
+        # Running: determine direction from water temp vs setpoint.
+        water = data.water_temp
+        setpoint = data.setpoint
+        if mode == Mode.POOL_COOL:
+            return HVACAction.COOLING if water > setpoint else HVACAction.IDLE
+        if mode == Mode.POOL_AUTO:
+            if water < setpoint:
+                return HVACAction.HEATING
+            if water > setpoint:
+                return HVACAction.COOLING
+            return HVACAction.IDLE
+        # POOL_HEAT, SPA
+        return HVACAction.HEATING if water < setpoint else HVACAction.IDLE
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        data = self.coordinator.data
+        if not data:
+            return {}
+        chgf = data.registers.get("CHGF", 0)
+        flt = data.registers.get("FLT", 0)
+        if chgf != 0 and flt == 0:
+            return {"status": "waiting_for_flow"}
+        if flt != 0:
+            return {"status": "fault"}
+        return {}
+
+    @property
     def current_temperature(self) -> float | None:
         """Current water temperature — None when offline or no water flow.
 
@@ -161,15 +226,21 @@ class GulfstreamClimate(CoordinatorEntity[GulfstreamCoordinator], ClimateEntity)
 
     @property
     def min_temp(self) -> float:
-        if self.coordinator.data:
-            return float(self.coordinator.data.min_heat)
-        return 50.0
+        """Minimum setpoint for the active mode."""
+        if self.preset_mode == PRESET_SPA:
+            return float(SPA_SETPOINT_MIN)
+        return float(POOL_SETPOINT_MIN)
 
     @property
     def max_temp(self) -> float:
-        if self.coordinator.data:
-            return float(self.coordinator.data.max_heat)
-        return 104.0
+        """Maximum setpoint for the active mode.
+
+        Pool modes are capped at 100°F (app-enforced limit), even though the
+        hardware supports 104°F. Spa mode allows the full 104°F range.
+        """
+        if self.preset_mode == PRESET_SPA:
+            return float(SPA_SETPOINT_MAX)
+        return float(POOL_SETPOINT_MAX)
 
     @property
     def hvac_mode(self) -> HVACMode | None:
@@ -208,51 +279,69 @@ class GulfstreamClimate(CoordinatorEntity[GulfstreamCoordinator], ClimateEntity)
         """Set target temperature with delivery verification.
 
         Routes to set_spa_setpoint (RSV2) when in spa mode, or
-        set_heat_setpoint (RSV1) for all other modes.
+        set_heat_setpoint (RSV1) for all other modes. Raises
+        ServiceValidationError for values outside the mode's valid range.
         """
         temp = kwargs.get(ATTR_TEMPERATURE)
         if temp is None:
             return
 
+        temp_int = int(temp)
         if self.preset_mode == PRESET_SPA:
+            if not (SPA_SETPOINT_MIN <= temp_int <= SPA_SETPOINT_MAX):
+                raise ServiceValidationError(
+                    f"Spa setpoint must be {SPA_SETPOINT_MIN}–{SPA_SETPOINT_MAX}°F, got {temp_int}"
+                )
             result = await self.hass.async_add_executor_job(
                 self.coordinator.device.set_spa_setpoint,
-                int(temp),
-                True,           # verify=True
+                temp_int,
+                True,
                 _VERIFY_TIMEOUT,
             )
         else:
+            if not (POOL_SETPOINT_MIN <= temp_int <= POOL_SETPOINT_MAX):
+                raise ServiceValidationError(
+                    f"Pool setpoint must be {POOL_SETPOINT_MIN}–{POOL_SETPOINT_MAX}°F, got {temp_int}"
+                )
             result = await self.hass.async_add_executor_job(
                 self.coordinator.device.set_heat_setpoint,
-                int(temp),
-                True,           # verify=True
+                temp_int,
+                True,
                 _VERIFY_TIMEOUT,
             )
 
-        if not result.verified:
-            _LOGGER.warning(
-                "Setpoint command to %s not confirmed within %ds: %s",
-                self.coordinator.device.device_key,
-                _VERIFY_TIMEOUT,
-                result.error,
-            )
+        await self._handle_command_result(result, f"setpoint→{temp_int}°F")
         await self.coordinator.async_request_refresh()
 
     async def _async_set_mode(self, mode: Mode) -> None:
         result = await self.hass.async_add_executor_job(
             self.coordinator.device.set_mode,
             mode,
-            True,           # verify=True
+            True,
             _VERIFY_TIMEOUT,
         )
-        if not result.verified:
-            _LOGGER.warning(
-                "Mode command to %s not confirmed within %ds: %s",
-                self.coordinator.device.device_key,
-                _VERIFY_TIMEOUT,
-                result.error,
-            )
+        await self._handle_command_result(result, f"mode→{mode.name}")
         await self.coordinator.async_request_refresh()
+
+    async def _handle_command_result(self, result: Any, description: str) -> None:
+        """Log the outcome of a command. CONFLICT and FAILED are handled differently."""
+        device_key = self.coordinator.device.device_key
+        if result.verified:
+            return
+        if result.conflict:
+            # Another user/app beat us to this register. Don't retry — just
+            # refresh so the UI shows the actual current value.
+            _LOGGER.warning(
+                "Command '%s' on %s conflicted: another source set the register "
+                "to %s instead. Refreshing state.",
+                description, device_key, result.actual_value,
+            )
+        else:
+            # Timed out or server rejected. Surface as error; user must retry.
+            _LOGGER.error(
+                "Command '%s' on %s was not confirmed within %ds: %s",
+                description, device_key, _VERIFY_TIMEOUT, result.error,
+            )
 
 
 def _is_recent(last_online: str, server_time: str, threshold: int) -> bool:

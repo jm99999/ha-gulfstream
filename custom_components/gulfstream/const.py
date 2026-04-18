@@ -10,7 +10,7 @@ UPDATE_INTERVAL = 30  # seconds between state polls
 # A device is considered stale/offline if it hasn't checked in within this many seconds.
 # The WiFi module normally polls the server every 3–10 seconds, so 3 minutes is
 # generous enough to survive transient connectivity issues without false alarms.
-STALE_THRESHOLD_SECONDS = 180
+STALE_THRESHOLD_SECONDS = 60
 
 MANUFACTURER = "Gulfstream / ICM Controls"
 MODEL = "Pool Heat Pump"
