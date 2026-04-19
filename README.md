@@ -2,7 +2,7 @@
 
 A Home Assistant custom integration for **Gulfstream pool heat pumps** controlled through the [Compass WiFi Heat Pump Navigator](https://play.google.com/store/apps/details?id=com.icmcontrols.gulfstream) app (ICM Controls / captouchwifi.com cloud service).
 
-![Gulfstream logo](custom_components/gulfstream/images/logo.png)
+![Gulfstream logo](custom_components/gulfstream/brand/logo.png)
 
 ---
 
