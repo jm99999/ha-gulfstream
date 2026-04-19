@@ -4,6 +4,8 @@ A Home Assistant custom integration for **Gulfstream pool heat pumps** controlle
 
 ![Gulfstream logo](custom_components/gulfstream/brand/logo.png)
 
+**Free for personal home use** at a single-family residence. Commercial, multi-unit, and managed-property use requires a license — see [LICENSE](LICENSE) for full terms.
+
 ---
 
 ## What it does

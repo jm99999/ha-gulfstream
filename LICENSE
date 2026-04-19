@@ -1,0 +1,72 @@
+Copyright © 2026 J.L.Mann. All rights reserved.
+
+SOURCE AVAILABLE LICENSE — PERSONAL USE ONLY
+
+1. Grant of Personal Use
+
+   Permission is granted, free of charge, to any individual to install
+   and use this software solely as a Home Assistant custom integration,
+   for personal, non-commercial monitoring and control of Gulfstream
+   pool heat pumps at a single-family private residence occupied by
+   the software user or their immediate household.
+
+2. Permitted Uses
+
+   - Viewing and inspecting the source code.
+   - Installing and running this software as a Home Assistant custom
+     integration at a single-family private residence for personal,
+     non-commercial pool heat pump management.
+
+3. Prohibited Uses — No Exceptions
+
+   - Modification of the source code or any compiled form.
+   - Distribution of the software, in whole or in part, in original
+     or modified form, by any means.
+   - Sublicensing or transferring rights to any third party.
+   - Use outside of Home Assistant or for any purpose other than
+     managing Gulfstream pool heat pumps.
+
+4. Commercial Licensing Required
+
+   The following uses are prohibited without a separate written
+   commercial license obtained from the author:
+
+   a. Any use at a multi-family dwelling, apartment complex,
+      condominium, townhome community, or other multi-unit
+      residential property.
+
+   b. Any use by or on behalf of a homeowners association (HOA),
+      property management company, or similar entity managing
+      shared or common facilities.
+
+   c. Any use at a hotel, motel, inn, resort, vacation rental,
+      or short-term rental property.
+
+   d. Any use at a commercial, industrial, or institutional
+      facility, including but not limited to fitness centers,
+      spas, clubs, schools, hospitals, or places of business.
+
+   e. Any use in the regular operations or facilities management
+      of a business or commercial enterprise, regardless of
+      whether the heat pump itself is used on-premises.
+
+   f. Any use by a contractor, integrator, technician, or service
+      provider installing, configuring, or managing the software
+      on behalf of a third party.
+
+5. Commercial Licensing
+
+   To obtain a commercial use license for any of the uses described
+   in Section 4, contact the author at the repository listed below.
+   Commercial licenses are granted at the author's sole discretion.
+
+6. No Warranty
+
+   THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+   EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+   OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND
+   NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
+   CLAIM, DAMAGES, OR OTHER LIABILITY ARISING FROM THE USE OF THIS
+   SOFTWARE.
+
+   Repository: https://github.com/jm99999/ha-gulfstream

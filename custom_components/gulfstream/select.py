@@ -1,3 +1,4 @@
+# Copyright © 2026 J.L.Mann. Personal use only. See LICENSE for terms.
 """Mode select entity for the Gulfstream Pool Heat Pump.
 
 Exposes the device's full 5-mode enum (Off / Pool Heat / Pool Cool /

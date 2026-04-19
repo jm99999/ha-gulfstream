@@ -1,3 +1,4 @@
+# Copyright © 2026 J.L.Mann. Personal use only. See LICENSE for terms.
 """Switch entity for the Gulfstream Pool Heat Pump panel lock."""
 
 from __future__ import annotations

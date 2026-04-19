@@ -1,3 +1,4 @@
+# Copyright © 2026 J.L.Mann. Personal use only. See LICENSE for terms.
 """Low-level HTTP client for the Gulfstream pool heat pump cloud API.
 
 Handles authentication, token lifecycle, and raw request/response handling

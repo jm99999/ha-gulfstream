@@ -1,3 +1,4 @@
+# Copyright © 2026 J.L.Mann. Personal use only. See LICENSE for terms.
 """Config flow for the Gulfstream Pool Heat Pump integration."""
 
 from __future__ import annotations

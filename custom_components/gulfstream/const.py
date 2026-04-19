@@ -1,3 +1,4 @@
+# Copyright © 2026 J.L.Mann. Personal use only. See LICENSE for terms.
 """Constants for the Gulfstream Pool Heat Pump integration."""
 
 DOMAIN = "gulfstream"

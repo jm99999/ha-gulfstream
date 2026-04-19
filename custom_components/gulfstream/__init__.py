@@ -1,3 +1,4 @@
+# Copyright © 2026 J.L.Mann. Personal use only. See LICENSE for terms.
 """The Gulfstream Pool Heat Pump integration."""
 
 from __future__ import annotations

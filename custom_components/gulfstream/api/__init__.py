@@ -1,3 +1,4 @@
+# Copyright © 2026 J.L.Mann. Personal use only. See LICENSE for terms.
 """gulfstream -- Python client for the Gulfstream pool heat pump cloud API.
 
 Reverse-engineered from the Compass WiFi Heat Pump Navigator Android app

@@ -1,3 +1,4 @@
+# Copyright © 2026 J.L.Mann. Personal use only. See LICENSE for terms.
 """Data models for the Gulfstream pool heat pump API.
 
 All models are plain dataclasses -- no ORM, no validation framework.

@@ -1,3 +1,4 @@
+# Copyright © 2026 J.L.Mann. Personal use only. See LICENSE for terms.
 """Exceptions for the Gulfstream pool heat pump API client."""
 
 

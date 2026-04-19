@@ -1,3 +1,4 @@
+# Copyright © 2026 J.L.Mann. Personal use only. See LICENSE for terms.
 """DataUpdateCoordinator for the Gulfstream integration."""
 
 from __future__ import annotations

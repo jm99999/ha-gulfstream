@@ -1,3 +1,4 @@
+# Copyright © 2026 J.L.Mann. Personal use only. See LICENSE for terms.
 """High-level device interface with command verification.
 
 This module provides the :class:`Device` class, which wraps a

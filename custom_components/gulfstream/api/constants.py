@@ -1,3 +1,4 @@
+# Copyright © 2026 J.L.Mann. Personal use only. See LICENSE for terms.
 """Constants, enums, and register codes for the Gulfstream pool heat pump API.
 
 These values were reverse-engineered from the Compass WiFi Heat Pump
