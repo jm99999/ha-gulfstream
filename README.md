@@ -113,14 +113,22 @@ Locks or unlocks the physical control buttons on the heat pump. Uses the same sh
 
 Setup is done entirely through the UI — no YAML required.
 
+[![Add Integration](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=gulfstream)
+
+Or manually:
+
 1. Go to **Settings → Devices & Services → Add Integration**.
 2. Search for **Gulfstream Pool Heat Pump**.
 3. Enter your Compass WiFi / captouchwifi.com username and password.
-4. If your account has multiple devices, select the one you want.
-
-The integration creates one device per config entry. To add a second heat pump, run the config flow again.
+4. If your account has multiple devices, select the one to add (see below).
 
 There are no options to configure after setup — available operating modes (Pool Cool, Pool Heat/Cool) are detected automatically from the device.
+
+### Multiple heat pumps on one account
+
+If your account has more than one device, a device picker appears after you enter your credentials. Select one heat pump and finish setup. To add the second (or third) heat pump, run **Add Integration** again — the same credentials, a different device selection — and a separate HA device is created for each.
+
+Attempting to add the same heat pump twice is safe: the integration detects the duplicate and aborts with an "already configured" message rather than creating conflicting entities.
 
 ---
 
@@ -191,8 +199,8 @@ The device supports several features that are not exposed in this integration:
 | Coil temperature (GEN15) | Not exposed | Raw register; internal diagnostic |
 | Suction line temperature (LCS) | Not exposed | Raw register; internal diagnostic |
 | Remote thermostat mode (DFG/VH) | Not exposed | Rarely used; complex interaction with setpoints |
-| OptionsFlow (reconfigure) | Not implemented | Restart HA after device change; re-run config flow to change credentials |
-| Multiple devices per entry | Not supported | One config entry per heat pump |
+| OptionsFlow (reconfigure) | Not implemented | Re-add the integration to change credentials; remove the entry first |
+| Multiple devices per entry | Not supported | One config entry per heat pump; run setup again to add a second unit |
 
 ---
 
