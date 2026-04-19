@@ -61,7 +61,7 @@ class GulfstreamConfigFlow(ConfigFlow, domain=DOMAIN):
                 if len(devices) == 0:
                     errors["base"] = "no_devices"
                 elif len(devices) == 1:
-                    return self._create_entry(devices[0])
+                    return await self._create_entry(devices[0])
                 else:
                     return await self.async_step_device()
 
@@ -83,7 +83,7 @@ class GulfstreamConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             device_key = user_input[CONF_DEVICE_KEY]
             device = next(d for d in self._devices if d.unique_key == device_key)
-            return self._create_entry(device)
+            return await self._create_entry(device)
 
         device_options = {
             d.unique_key: f"{d.name or d.unique_key} ({d.description or d.model_name})"
@@ -97,8 +97,16 @@ class GulfstreamConfigFlow(ConfigFlow, domain=DOMAIN):
             ),
         )
 
-    def _create_entry(self, device: DeviceInfo) -> ConfigFlowResult:
-        """Create the config entry for the selected device."""
+    async def _create_entry(self, device: DeviceInfo) -> ConfigFlowResult:
+        """Create the config entry for the selected device.
+
+        The device's unique_key is set as the config entry's unique_id so
+        HA aborts the flow if this device is already configured — prevents
+        duplicate entries (and duplicate entity unique IDs) when the user
+        runs the flow twice for the same heat pump.
+        """
+        await self.async_set_unique_id(device.unique_key)
+        self._abort_if_unique_id_configured()
         return self.async_create_entry(
             title=device.name or device.unique_key,
             data={
