@@ -228,18 +228,18 @@ class GulfstreamClimate(CoordinatorEntity[GulfstreamCoordinator], ClimateEntity)
 
     @property
     def current_temperature(self) -> float | None:
-        """Current water temperature — None when offline or no flow.
+        """Current water temperature — None while it can't be trusted.
 
-        When the pool pump is off (CHGF != 0) the water sensor reads
-        stagnant pipe water, not pool water. Same suppression applies
-        when the device connection is stale.
+        The reading is suppressed when the device is stale, the pump is
+        off, or the pump has been running for less than ~60 s (pipe water
+        hasn't been flushed yet). Mirrors GulfstreamWaterTempSensor.
         """
         data = self.coordinator.data
         if not data:
             return None
         if not _is_recent(data.last_online, data.server_time, STALE_THRESHOLD_SECONDS):
             return None
-        if data.registers.get("CHGF", 0) != 0:
+        if not self.coordinator.water_temp_valid:
             return None
         return float(data.water_temp)
 

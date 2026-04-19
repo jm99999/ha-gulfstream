@@ -70,9 +70,10 @@ class GulfstreamWaterTempSensor(_GulfstreamSensor):
 
     - The device is offline (WiFi module hasn't checked in within
       STALE_THRESHOLD_SECONDS). Stale data isn't pool temperature.
-    - The pool circulation pump is off (no_flow fault). Without water
-      flowing through the heat exchanger the sensor reads the temperature
-      of stagnant water in the pipe, not the pool itself.
+    - The pool circulation pump is off OR has been running for less than
+      ~60 seconds. The RMT sensor sits in the plumbing; until fresh pool
+      water has flushed the heat exchanger the reading reflects stagnant
+      pipe water (roughly air temperature), not pool water.
 
     When the state is unknown HA's recorder skips the data point entirely,
     so history graphs won't show misleading flat lines or dips.
@@ -97,10 +98,8 @@ class GulfstreamWaterTempSensor(_GulfstreamSensor):
         if not _is_recent(data.last_online, data.server_time, STALE_THRESHOLD_SECONDS):
             return None
 
-        # No water flow — sensor reads pipe water, not pool water.
-        # CHGF is the authoritative flow indicator (0 = flow, 8 = no flow);
-        # this covers both scheduled pump-off and genuine no-flow faults.
-        if data.registers.get("CHGF", 0) != 0:
+        # Pump off or just started — reading isn't pool temperature yet.
+        if not self.coordinator.water_temp_valid:
             return None
 
         return data.water_temp
